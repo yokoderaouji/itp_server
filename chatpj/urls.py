@@ -17,10 +17,11 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import include, path
 
-from chatpj.views import TestRun
+from chatpj.views import StoryChat, TestRun, TestRunChat
 
 urlpatterns = [
     path('', TestRun.as_view()),
-    path('test', TestRun.as_view()),
+    path('test', TestRunChat.as_view()),
+    path('StoryChat', StoryChat.as_view())
 
 ]
