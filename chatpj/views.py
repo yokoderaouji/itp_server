@@ -8,7 +8,7 @@ from google import genai
 from google.genai import types
 
 from chatpj.const import GEMINI_API_KEY
-from chatpj.utils import getChatSetting
+from chatpj.utils import extract_title, getChatSetting
 
 
 class TestRun (APIView): 
@@ -125,9 +125,12 @@ class StoryChat(APIView):
             if chunk.text:
                 full_response_text += chunk.text
 
+
+
         return Response({
             'status': 'SUCCESS',
             'current_reply': full_response_text.strip(),
+            'current_title':extract_title(full_response_text.strip()),
             'history': history
         })
 
