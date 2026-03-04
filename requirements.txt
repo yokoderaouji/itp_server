@@ -1,3 +1,7 @@
 djangorestframework
 markdown       
 django-filter 
+djangorestframework-simplejwt
+pymysql
+django-mysql
+mysqlclient

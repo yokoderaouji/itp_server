@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
 from pathlib import Path
+from datetime import timedelta
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -53,6 +54,7 @@ CORS_ALLOW_HEADERS = [
 
 INSTALLED_APPS = [
     'corsheaders',
+    'rest_framework',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -100,9 +102,25 @@ DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
         'NAME': BASE_DIR / 'db.sqlite3',
-    }
+    },
+    'story_db': {
+        'ENGINE': 'django.db.backends.mysql',
+        'NAME': 'itp_db',
+        'USER': 'root',
+        'PASSWORD': 'root',
+        'HOST': '127.0.0.1',
+        'PORT': '3306',
+        'OPTIONS': {
+            'ssl': True,
+            'charset': 'utf8',
+        }, 
+        'ATOMIC_REQUESTS': True
+    },
 }
 
+DATABASE_ROUTERS = [
+    'routers.db_routers.storyDBRouter',
+]
 
 # Password validation
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
@@ -121,6 +139,16 @@ AUTH_PASSWORD_VALIDATORS = [
         'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
     },
 ]
+
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),  # Access token 的有效時間，預設是 5 分鐘
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=1),   # Refresh token 的有效時間，預設是 1 天
+    'ROTATE_REFRESH_TOKENS': False,                # 是否在 refresh 時旋轉 token（可選）
+    'SIGNING_KEY': SECRET_KEY,                     # 明確指定使用 SECRET_KEY（雖然預設就是）
+    'ALGORITHM': 'HS256',                         # 確認算法（預設）
+    'USER_ID_FIELD': 'user_id',
+    'USER_ID_CLAIM': 'user_id',
+}
 
 
 # Internationalization
