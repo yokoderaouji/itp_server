@@ -141,11 +141,11 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),  # Access token 的有效時間，預設是 5 分鐘
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=1),   # Refresh token 的有效時間，預設是 1 天
-    'ROTATE_REFRESH_TOKENS': False,                # 是否在 refresh 時旋轉 token（可選）
-    'SIGNING_KEY': SECRET_KEY,                     # 明確指定使用 SECRET_KEY（雖然預設就是）
-    'ALGORITHM': 'HS256',                         # 確認算法（預設）
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=180),  
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),  
+    'ROTATE_REFRESH_TOKENS': False,               
+    'SIGNING_KEY': SECRET_KEY,                     
+    'ALGORITHM': 'HS256',                        
     'USER_ID_FIELD': 'user_id',
     'USER_ID_CLAIM': 'user_id',
 }

@@ -17,7 +17,7 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import include, path
 
-from chatpj.views import StoryChat, TestRun, TestRunChat, LoginFunction, GetStoryTemp, GetSingleStory, SetUpNewStoryOrGetOldStory
+from chatpj.views import StoryChat, TestRun, TestRunChat, LoginFunction, GetStoryTemp, GetSingleStory, SetUpNewStoryOrGetOldStory,RetraceStoryChat
 
 urlpatterns = [
     path('', TestRun.as_view()),
@@ -25,6 +25,7 @@ urlpatterns = [
     path('StoryChat', StoryChat.as_view()),
     path('GetSingleStory', GetSingleStory.as_view()),
     path('GetStoryTemp', GetStoryTemp.as_view()),
+    path('RetraceStoryChat', RetraceStoryChat.as_view()),
     path('SetUpNewStoryOrGetOldStory', SetUpNewStoryOrGetOldStory.as_view()),
     path('Login', LoginFunction.as_view()),
 ]

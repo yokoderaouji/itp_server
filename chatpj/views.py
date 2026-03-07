@@ -11,6 +11,7 @@ from .models import UserTable, StoryTemp, UserStory, UserStoryEntry
 from .serializers import StoryTempSerializer, UserStorySerializer, UserStoryEntrySerializer
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import transaction
+from django.db.models import Prefetch
 import json
 
 from chatpj.const import GEMINI_API_KEY
@@ -229,6 +230,8 @@ class SetUpNewStoryOrGetOldStory(APIView):
             user_id=user_id,
             story_id=story_id,
             user_story_status=UserStory.Status.ACTIVE
+        ).prefetch_related(
+            Prefetch('entries', queryset=UserStoryEntry.objects.filter(entry_status=UserStoryEntry.Status.ACTIVE))
         ).first()
 
         if user_story:
@@ -285,7 +288,72 @@ class SetUpNewStoryOrGetOldStory(APIView):
             'data': serializer.data
         })
 
+class RetraceStoryChat(APIView):
+    def post(self, request):
+        # authenticate user
+        if 'Authorization' not in request.headers:
+            return Response({'error': 'Authorization header missing'}, status=status.HTTP_401_UNAUTHORIZED)
+        auth_header = request.headers['Authorization']
+        if not auth_header.startswith('Bearer '):
+            return Response({'error': 'Invalid authorization header'}, status=status.HTTP_401_UNAUTHORIZED)
+        token = auth_header.split(' ')[1]
+        try:
+            access_token = AccessToken(token)
+            user_id = access_token['user_id']
+            _user = UserTable.objects.get(user_id=user_id)
+        except (ObjectDoesNotExist, KeyError):
+            return Response({'error': 'Invalid token or user not found'}, status=status.HTTP_401_UNAUTHORIZED)
+        except Exception:
+            return Response({'error': 'Invalid token'}, status=status.HTTP_401_UNAUTHORIZED)
 
+        # parse payload (allow both raw JSON and DRF request.data)
+        try:
+            data = json.loads(request.body.decode('utf-8'))
+        except Exception:
+            data = request.data
+
+        user_story_id = data.get('user_story_id')
+        user_story_entry_id = data.get('user_story_entry_id')
+
+        if not user_story_id or not user_story_entry_id:
+            return Response({'error': 'user_story_id and user_story_entry_id are required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # ensure story belongs to this user and is active
+        try:
+            user_story = UserStory.objects.get(
+                user_story_id=user_story_id,
+                user_id=user_id,
+                user_story_status=UserStory.Status.ACTIVE,
+            )
+        except UserStory.DoesNotExist:
+            return Response({'error': 'User story not found or not active.'}, status=status.HTTP_404_NOT_FOUND)
+
+        # retrieve selected entry
+        try:
+            selected = UserStoryEntry.objects.get(
+                user_story=user_story,
+                user_story_entry_id=user_story_entry_id,
+                entry_status=UserStoryEntry.Status.ACTIVE,
+            )
+        except UserStoryEntry.DoesNotExist:
+            return Response({'error': 'Story entry not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        # entry must be from the user
+        if selected.entry_role != UserStoryEntry.Role.USER:
+            return Response({'error': 'Can only retrace to a user message.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # deactivate all later active entries for this story
+        UserStoryEntry.objects.filter(
+            user_story=user_story,
+            created_on__gte=selected.created_on,
+            entry_status=UserStoryEntry.Status.ACTIVE,
+        ).update(entry_status=UserStoryEntry.Status.INACTIVE)
+
+        return Response({
+            'status': 'SUCCESS',
+            'message': 'Chat retraced to selected user entry.',
+            'retraced_entry_id': selected.user_story_entry_id
+        })
 
 class StoryChat(APIView):
     def post(self, request):
@@ -306,8 +374,6 @@ class StoryChat(APIView):
             user_id = access_token['user_id']
             print("User ID from token:", user_id)
             user = UserTable.objects.get(user_id=user_id)
-            if user.user_type != UserTable.UserType.KID:
-                return Response({'error': 'Not a kid account'}, status=status.HTTP_403_FORBIDDEN)
         except (ObjectDoesNotExist, KeyError):
             return Response({'error': 'Invalid token or user not found'}, status=status.HTTP_401_UNAUTHORIZED)
         except Exception:
@@ -384,6 +450,15 @@ class StoryChat(APIView):
             if chunk.text:
                 full_response_text += chunk.text
 
+        # Save the user input as an entry
+        UserStoryEntry.objects.create(
+            user_story=user_story,
+            entry_title="User Input",
+            entry_content=user_message.strip(),
+            entry_role=UserStoryEntry.Role.USER,
+            entry_status=UserStoryEntry.Status.ACTIVE
+        )
+
         # Save the AI response as a new entry
         UserStoryEntry.objects.create(
             user_story=user_story,
@@ -393,10 +468,18 @@ class StoryChat(APIView):
             entry_status=UserStoryEntry.Status.ACTIVE
         )
 
+        # Fetch updated active history
+        updated_entries = UserStoryEntry.objects.filter(
+            user_story=user_story,
+            entry_status=UserStoryEntry.Status.ACTIVE
+        ).order_by('created_on')
+        history_serializer = UserStoryEntrySerializer(updated_entries, many=True)
+
         return Response({
             'status': 'SUCCESS',
             'current_reply': full_response_text.strip(),
             'current_title': extract_title(full_response_text.strip()),
+            'history': history_serializer.data,
         })
 
 
@@ -419,8 +502,6 @@ class StoryChat_old(APIView):
             user_id = access_token['user_id']
             print("User ID from token:", user_id)
             user = UserTable.objects.get(user_id=user_id)
-            if user.user_type != UserTable.UserType.KID:
-                return Response({'error': 'Not a kid account'}, status=status.HTTP_403_FORBIDDEN)
         except (ObjectDoesNotExist, KeyError):
             return Response({'error': 'Invalid token or user not found'}, status=status.HTTP_401_UNAUTHORIZED)
         except Exception:
