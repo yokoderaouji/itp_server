@@ -15,7 +15,7 @@ from django.db.models import Prefetch
 import json
 
 from chatpj.const import GEMINI_API_KEY
-from chatpj.utils import extract_title, getChatSetting
+from chatpj.utils import extract_title, getChatGenrateSetting, getChatSetting, getChatSetting_fallback, getDefaultReportPrompt, split_text_by_chars
 
 
 class TestRun (APIView): 
@@ -211,6 +211,40 @@ class SetUpNewStoryOrGetOldStory(APIView):
 
         # Get story_id from query params
         story_id = request.query_params.get('story_id')
+        kid_id = request.query_params.get('kid_id')
+
+        if kid_id:
+            try:
+                kid_id = int(kid_id)
+            except ValueError:
+                return Response(
+                    {'error': 'kid_id must be an integer'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            if user.user_type != UserTable.UserType.PARENT:
+                return Response(
+                    {'error': 'Only parents can access or create stories for kids'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
+            try:
+                kid = UserTable.objects.get(
+                    user_id=kid_id,
+                    user_type=UserTable.UserType.KID,
+                    parent_id=user.user_id
+                )
+            except UserTable.DoesNotExist:
+                return Response(
+                    {'error': 'Kid not found or not associated with this parent'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            # Replace with kid
+            user = kid
+            user_id = kid_id
+            print(f"Parent {user.user_name} accessing story for kid {kid.user_name}")
+
         if not story_id:
             return Response(
                 {'error': 'story_id parameter is required'},
@@ -270,13 +304,14 @@ class SetUpNewStoryOrGetOldStory(APIView):
                 )
 
                 # Create second entry: Story content
-                UserStoryEntry.objects.create(
-                    user_story=user_story,
-                    entry_title=f"{story_temp.story_title} (1)",
-                    entry_content=story_temp.story_content,
-                    entry_role=UserStoryEntry.Role.AI,
-                    entry_status=UserStoryEntry.Status.ACTIVE
-                )
+                if story_temp.story_content:
+                    UserStoryEntry.objects.create(
+                        user_story=user_story,
+                        entry_title=f"{story_temp.story_title} (1)",
+                        entry_content=story_temp.story_content,
+                        entry_role=UserStoryEntry.Role.AI,
+                        entry_status=UserStoryEntry.Status.ACTIVE
+                    )
         except Exception as e:
             # atomic block will roll back automatically
             return Response({'error': f'Failed to create story entries: {e}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -524,7 +559,7 @@ class StoryChat_old(APIView):
 
         gemini_history = []
 
-        addChatSetting = getChatSetting(chat_tem)
+        addChatSetting = getChatSetting_fallback(chat_tem)
 
         for temItem in addChatSetting:
             gemini_history.append(
@@ -539,7 +574,7 @@ class StoryChat_old(APIView):
             content = msg['text']
 
             gemini_role = "user" if role == "user" else "model"
-
+            print("Adding to history - Role:", gemini_role, "Content:", content)
             gemini_history.append(
                 types.Content(
                     role=gemini_role,
@@ -567,10 +602,10 @@ class StoryChat_old(APIView):
         })
 
 class LoginFunction(APIView):
+
     def post(self, request):
 
         try:
-            # Explicitly parse JSON from request body
             data = json.loads(request.body.decode('utf-8'))
         except json.JSONDecodeError:
             return Response({'error': 'Invalid JSON format.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -602,7 +637,564 @@ class LoginFunction(APIView):
             'access': str(refresh.access_token),
             'user': {
                 'username': user.user_name,
+                'nickname': user.user_nickname,
                 'type': user.get_user_type_display(),
                 'status': user.get_user_status_display()
             }
         }, status=status.HTTP_200_OK)
+    
+
+
+class getChildrenListByParentId(APIView):
+    def get(self, request):
+        if 'Authorization' not in request.headers:
+            return Response(
+                {'error': 'Authorization header missing'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+
+        auth_header = request.headers['Authorization']
+        if not auth_header.startswith('Bearer '):
+            return Response(
+                {'error': 'Invalid authorization header'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+
+        token = auth_header.split(' ')[1]
+
+        try:
+            access_token = AccessToken(token)
+            user_id = access_token['user_id']
+            user = UserTable.objects.get(user_id=user_id)
+        except (ObjectDoesNotExist, KeyError):
+            return Response(
+                {'error': 'Invalid token or user not found'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+        except Exception:
+            return Response(
+                {'error': 'Invalid token'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+
+        parent_id = user_id
+
+        if not parent_id:
+            return Response({'error': 'parent_id parameter is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            parent_id = int(parent_id)
+        except ValueError:
+            return Response({'error': 'parent_id must be an integer.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Verify parent exists
+        try:
+            parent = UserTable.objects.get(user_id=parent_id, user_type=UserTable.UserType.PARENT)
+        except UserTable.DoesNotExist:
+            return Response({'error': 'Parent user not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Get all children of this parent (assuming parent_id field exists in UserTable)
+        try:
+            children = UserTable.objects.filter(
+                parent_id=parent_id,
+                user_type=UserTable.UserType.KID,
+                user_status=UserTable.UserStatus.ACTIVE
+            ).order_by('user_name')
+        except Exception as e:
+            return Response({'error': f'Error retrieving children: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        children_data = [
+            {
+                'user_id': child.user_id,
+                'user_name': child.user_name,
+                'user_nickname': child.user_nickname,
+                'user_type': child.get_user_type_display(),
+                'user_status': child.get_user_status_display(),
+                'created_on': child.created_on,
+            }
+            for child in children
+        ]
+
+        return Response({
+            'status': 'SUCCESS',
+            'parent_id': parent_id,
+            'parent_name': parent.user_name,
+            'children': children_data,
+            'total': len(children_data)
+        }) 
+    
+
+class GetKidStoryRecords(APIView):
+    def get(self, request):
+        if 'Authorization' not in request.headers:
+            return Response(
+                {'error': 'Authorization header missing'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+
+        auth_header = request.headers['Authorization']
+        if not auth_header.startswith('Bearer '):
+            return Response(
+                {'error': 'Invalid authorization header'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+
+        token = auth_header.split(' ')[1]
+
+        try:
+            access_token = AccessToken(token)
+            user_id = access_token['user_id']
+            user = UserTable.objects.get(user_id=user_id)
+        except (ObjectDoesNotExist, KeyError):
+            return Response(
+                {'error': 'Invalid token or user not found'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+        except Exception:
+            return Response(
+                {'error': 'Invalid token'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+
+        kid_id = request.query_params.get('kid_id')
+
+        if not kid_id:
+            return Response({'error': 'kid_id parameter is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            kid_id = int(kid_id)
+        except ValueError:
+            return Response({'error': 'kid_id must be an integer.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Verify kid exists
+        try:
+            kid = UserTable.objects.get(user_id=kid_id, user_type=UserTable.UserType.KID)
+        except UserTable.DoesNotExist:
+            return Response({'error': 'Kid user not found.'}, status=status.HTTP_404_NOT_FOUND)
+        
+        # Get all active stories of this kid
+        try:
+            stories = UserStory.objects.filter(
+                user_id=kid_id,
+                user_story_status=UserStory.Status.ACTIVE
+            ).order_by('-created_on')
+        except Exception as e:
+            return Response({'error': f'Error retrieving stories: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+        stories_data = []
+        for story in stories:
+            stories_data.append({
+                'user_story_id': story.user_story_id,
+                'story_id': story.story.story_id,
+                'story_title': story.story.story_title,
+                'created_on': story.created_on,
+            })
+
+        return Response({
+            'status': 'SUCCESS',
+            'kid_id': kid_id,
+            'stories': stories_data,
+            'total': len(stories_data)
+        }) 
+
+
+class GenOrGetReportFromStory(APIView):
+    def get(self, request):
+        if 'Authorization' not in request.headers:
+            return Response(
+                {'error': 'Authorization header missing'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+
+        auth_header = request.headers['Authorization']
+        if not auth_header.startswith('Bearer '):
+            return Response(
+                {'error': 'Invalid authorization header'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+
+        token = auth_header.split(' ')[1]
+
+        try:
+            access_token = AccessToken(token)
+            user_id = access_token['user_id']
+            user = UserTable.objects.get(user_id=user_id)
+        except (ObjectDoesNotExist, KeyError):
+            return Response(
+                {'error': 'Invalid token or user not found'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+        except Exception:
+            return Response(
+                {'error': 'Invalid token'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+
+        user_story_id = request.query_params.get('user_story_id')
+
+        if not user_story_id:
+            return Response({'error': 'user_story_id parameter is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        getReportFromUserStory = UserStory.objects.filter(
+            user_story_id=user_story_id,
+            user_story_status=UserStory.Status.ACTIVE,
+        ).first()
+
+        if not getReportFromUserStory:
+            return Response({'error': 'Report not found for the specified story.'}, status=status.HTTP_404_NOT_FOUND)
+
+        return Response({
+            'status': 'SUCCESS',
+            'report': getReportFromUserStory.user_story_report
+        })
+
+    def post(self, request):
+        if 'Authorization' not in request.headers:
+            return Response(
+                {'error': 'Authorization header missing'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+
+        auth_header = request.headers['Authorization']
+        if not auth_header.startswith('Bearer '):
+            return Response(
+                {'error': 'Invalid authorization header'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+
+        token = auth_header.split(' ')[1]
+
+        try:
+            access_token = AccessToken(token)
+            user_id = access_token['user_id']
+            user = UserTable.objects.get(user_id=user_id)
+        except (ObjectDoesNotExist, KeyError):
+            return Response(
+                {'error': 'Invalid token or user not found'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+        except Exception:
+            return Response(
+                {'error': 'Invalid token'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+        
+        try:
+            data = json.loads(request.body.decode('utf-8'))
+        except json.JSONDecodeError:
+            return Response({'error': 'Invalid JSON format.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        client = genai.Client(api_key=GEMINI_API_KEY)
+        user_story_id = data.get('user_story_id')
+
+        if not user_story_id:
+            return Response({'error': 'user_story_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        user_story_entrys = UserStoryEntry.objects.filter(
+            user_story_id=user_story_id,
+            entry_status=UserStoryEntry.Status.ACTIVE
+        ).order_by('created_on')
+
+        report_request = getDefaultReportPrompt()
+        gemini_history = []
+
+        gemini_history.append(
+                types.Content(
+                    role='user',
+                    parts=[types.Part(text=report_request)]
+                )
+            )
+
+        # Add history from entries
+        for entry in user_story_entrys:
+            gemini_role = "user" if entry.entry_role == UserStoryEntry.Role.USER else "model"
+            gemini_history.append(
+                types.Content(
+                    role=gemini_role,
+                    parts=[types.Part(text=entry.entry_content)]
+                )
+            )
+
+        chat = client.chats.create(model="gemini-2.5-flash",
+                                history=gemini_history)
+
+        response_stream = chat.send_message_stream(report_request)
+
+        full_response_text = ""
+        for chunk in response_stream:
+            if chunk.text:
+                full_response_text += chunk.text
+
+        UserStory.objects.filter(user_story_id=user_story_id).update(
+            user_story_report=full_response_text.strip())
+
+        return Response({
+            'status': 'SUCCESS',
+            'report': full_response_text.strip(),
+        })
+
+
+
+class GenerateStory(APIView):
+    def post(self, request):
+        client = genai.Client(api_key=GEMINI_API_KEY)
+        if 'Authorization' not in request.headers:
+            return Response(
+                {'error': 'Authorization header missing'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+        auth_header = request.headers['Authorization']
+        if not auth_header.startswith('Bearer '):
+            return Response(
+                {'error': 'Invalid authorization header'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+        token = auth_header.split(' ')[1]
+        try:
+            access_token = AccessToken(token)
+            user_id = access_token['user_id']
+            user = UserTable.objects.get(user_id=user_id)
+        except (ObjectDoesNotExist, KeyError):
+            return Response(
+                {'error': 'Invalid token or user not found'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+        except Exception:
+            return Response(
+                {'error': 'Invalid token'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+        data = request.data
+
+        # history = data.get('history', [])
+        title = data.get('title', '').strip()
+        description = data.get('description', '').strip()
+        user_message = data.get('user_message', '').strip()
+
+        if not title or not description:
+            return Response({
+                'status': 'ERROR',
+                'message': 'Title and description are required'
+            }, status=400)
+
+        if not user_message:
+            return Response({
+                'status': 'ERROR',
+                'message': 'No msg input'
+            }, status=400)
+
+        gemini_history = []
+
+        addChatSetting = getChatGenrateSetting()
+
+        for temItem in addChatSetting:
+            gemini_history.append(
+                types.Content(
+                    role='user',
+                    parts=[types.Part(text=temItem)]
+                )
+            )
+
+        defaultResponse = """Please tell me the story setting you want to create (the more detailed the better). I will not return HTML story, just the story setting. """
+
+        gemini_history.append(
+                types.Content(
+                    role='model',
+                    parts=[types.Part(text=defaultResponse)]
+                )
+            )
+
+        # for msg in history:
+        #     role = msg['sender'] 
+        #     content = msg['text']
+
+        #     gemini_role = "user" if role == "user" else "model"
+        #     gemini_history.append(
+        #         types.Content(
+        #             role=gemini_role,
+        #             parts=[types.Part(text=content)]
+        #         )
+        #     )
+
+        chat = client.chats.create(model="gemini-2.5-flash",
+                                history=gemini_history)
+        
+        mix_user_msg = f"Title: {title}\nDescription: {description}\nSetting: {user_message}"
+
+        response_stream = chat.send_message_stream(mix_user_msg)
+
+        full_response_text = ""
+        for chunk in response_stream:
+            if chunk.text:
+                full_response_text += chunk.text
+
+
+
+        return Response({
+            'status': 'SUCCESS',
+            'story_temp': full_response_text.strip(),
+            # 'current_title':extract_title(full_response_text.strip()),
+            # 'history': history
+        })
+    
+
+class GenerateStoryIntro(APIView):
+    def post(self, request):
+        client = genai.Client(api_key=GEMINI_API_KEY)
+        if 'Authorization' not in request.headers:
+            return Response(
+                {'error': 'Authorization header missing'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+        auth_header = request.headers['Authorization']
+        if not auth_header.startswith('Bearer '):
+            return Response(
+                {'error': 'Invalid authorization header'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+        token = auth_header.split(' ')[1]
+        try:
+            access_token = AccessToken(token)
+            user_id = access_token['user_id']
+            user = UserTable.objects.get(user_id=user_id)
+        except (ObjectDoesNotExist, KeyError):
+            return Response(
+                {'error': 'Invalid token or user not found'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+        except Exception:
+            return Response(
+                {'error': 'Invalid token'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+        data = request.data
+
+        # history = data.get('history', [])
+        user_storysetting = data.get('user_storysetting', '').strip()
+        if not user_storysetting:
+            return Response({
+                'status': 'ERROR',
+                'message': 'No story setting input'
+            }, status=400)
+        
+        ArrTemp = split_text_by_chars(user_storysetting, 5)
+
+        gemini_history = []
+
+        for msg in ArrTemp:
+            content = msg.strip()
+            gemini_role = "user"
+            gemini_history.append(
+                types.Content(
+                    role=gemini_role,
+                    parts=[types.Part(text=content)]
+                )
+            )
+
+        chat = client.chats.create(model="gemini-2.5-flash",
+                                history=gemini_history)
+        
+        default_story_intro_prompt ="First, generate a creative and engaging introduction for a children's story based on the following setting: " + user_storysetting + " The introduction should be suitable for children, capturing their imagination and setting the stage for an exciting adventure. Please provide a vivid and captivating opening that draws young readers into the world of the story."
+
+        response_stream = chat.send_message_stream(default_story_intro_prompt)
+
+        full_response_text = ""
+        for chunk in response_stream:
+            if chunk.text:
+                full_response_text += chunk.text
+
+        return Response({
+            'status': 'SUCCESS',
+            'story_intro': full_response_text.strip(),
+        })
+    
+
+class GenerateStoryToDB(APIView):
+    def post(self, request):
+        if 'Authorization' not in request.headers:
+            return Response(
+                {'error': 'Authorization header missing'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+        auth_header = request.headers['Authorization']
+        if not auth_header.startswith('Bearer '):
+            return Response(
+                {'error': 'Invalid authorization header'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+        token = auth_header.split(' ')[1]
+        try:
+            access_token = AccessToken(token)
+            user_id = access_token['user_id']
+            user = UserTable.objects.get(user_id=user_id)
+        except (ObjectDoesNotExist, KeyError):
+            return Response(
+                {'error': 'Invalid token or user not found'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+        except Exception:
+            return Response(
+                {'error': 'Invalid token'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+        data = request.data
+
+        title = data.get('title', '').strip()
+        description = data.get('description', '').strip()
+        user_storysetting = data.get('user_storysetting', '').strip()
+        user_storysetting_intro = data.get('user_storysetting_intro', '').strip()
+        tag1 = data.get('tag1', '').strip()
+        tag2 = data.get('tag2', '').strip()
+        tag3 = data.get('tag3', '').strip()
+
+        if not title:
+            return Response({
+                'status': 'ERROR',
+                'message': 'Title is required'
+            }, status=400)
+        
+        if not description:
+            return Response({
+                'status': 'ERROR',
+                'message': 'Description is required'
+            }, status=400)
+        if not tag1:
+            return Response({
+                'status': 'ERROR',
+                'message': 'At least one tag is required'
+            }, status=400)
+        
+
+        if not user_storysetting or not user_storysetting_intro:
+            return Response({
+                'status': 'ERROR',
+                'message': 'Story setting and introduction are required'
+            }, status=400)
+        
+        ArrTemp = split_text_by_chars(user_storysetting, 5)
+
+        try:
+            story_temp = StoryTemp.objects.create(
+                story_title=title,
+                story_description=description,
+                story_start=user_storysetting_intro,
+                story_tag_1=tag1,
+                story_tag_2=tag2 if tag2 else None,
+                story_tag_3=tag3 if tag3 else None,
+                story_setting_1=ArrTemp[0],
+                story_setting_2=ArrTemp[1],
+                story_setting_3=ArrTemp[2],
+                story_setting_4=ArrTemp[3],
+                story_setting_5=ArrTemp[4],
+            )
+        except Exception as e:
+            return Response({'error': f'Failed to save story template: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+        return Response({
+            'status': 'SUCCESS',
+            'story_temp_id': story_temp.story_id,
+            'story_title': story_temp.story_title,
+        })
+        
+        
+

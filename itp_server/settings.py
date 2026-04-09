@@ -112,7 +112,8 @@ DATABASES = {
         'PORT': '3306',
         'OPTIONS': {
             'ssl': True,
-            'charset': 'utf8',
+            'charset': 'utf8mb4',
+            'use_unicode': True,
         }, 
         'ATOMIC_REQUESTS': True
     },
