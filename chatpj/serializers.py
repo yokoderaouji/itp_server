@@ -3,7 +3,6 @@ from .models import StoryTemp, UserStory, UserStoryEntry
 
 
 class StoryTempSerializer(serializers.ModelSerializer):
-    """Serializer for StoryTemp model."""
 
     class Meta:
         model = StoryTemp
@@ -29,7 +28,6 @@ class StoryTempSerializer(serializers.ModelSerializer):
 
 
 class UserStoryEntrySerializer(serializers.ModelSerializer):
-    """Serializer for UserStoryEntry model."""
 
     class Meta:
         model = UserStoryEntry
@@ -46,7 +44,6 @@ class UserStoryEntrySerializer(serializers.ModelSerializer):
 
 
 class UserStorySerializer(serializers.ModelSerializer):
-    """Serializer for UserStory model with nested entries."""
 
     entries = UserStoryEntrySerializer(many=True, read_only=True)
 

@@ -14,9 +14,10 @@ from django.db import transaction
 from django.db.models import Prefetch
 import json
 
-from chatpj.const import GEMINI_API_KEY
+from chatpj.const import GEMINI_API_KEY,GEMINI_API_MODEL
 from chatpj.utils import extract_title, getChatGenrateSetting, getChatSetting, getChatSetting_fallback, getDefaultReportPrompt, split_text_by_chars
 
+test = ""
 
 class TestRun (APIView): 
 
@@ -24,7 +25,7 @@ class TestRun (APIView):
         print("TEST")
         client = genai.Client(api_key=GEMINI_API_KEY)
         response = client.models.generate_content(
-            model="gemini-2.5-flash", contents="Explain how LLM works"
+            model=GEMINI_API_MODEL, contents="Explain how LLM works"
         )
         print(response.text)
         return Response({'status': 'SUCCESS','response': response.text})
@@ -61,7 +62,7 @@ class TestRunChat (APIView):
                 )
             )
 
-        chat = client.chats.create(model="gemini-2.5-flash",
+        chat = client.chats.create(model=GEMINI_API_MODEL,
                                 history=gemini_history)
 
         response_stream = chat.send_message_stream(user_message)
@@ -80,7 +81,6 @@ class TestRunChat (APIView):
 class GetStoryTemp(APIView):
 
     def get(self, request):
-        # Check for Authorization header
         if 'Authorization' not in request.headers:
             return Response(
                 {'error': 'Authorization header missing'},
@@ -96,7 +96,6 @@ class GetStoryTemp(APIView):
 
         token = auth_header.split(' ')[1]
 
-        # Validate token and extract user_id
         try:
             access_token = AccessToken(token)
             user_id = access_token['user_id']
@@ -112,7 +111,6 @@ class GetStoryTemp(APIView):
                 status=status.HTTP_401_UNAUTHORIZED
             )
 
-        # Filter: story_status must be 'Y' (Active) or 'L' (Locked)
         temps = StoryTemp.objects.filter(
             story_status__in=[StoryTemp.StoryTempStatus.ACTIVE, StoryTemp.StoryTempStatus.LOCKED]
         ).order_by('-created_on')
@@ -178,7 +176,6 @@ class SetUpNewStoryOrGetOldStory(APIView):
     """Set up a new story or retrieve existing user story with entries."""
 
     def get(self, request):
-        # Authorization check
         if 'Authorization' not in request.headers:
             return Response(
                 {'error': 'Authorization header missing'},
@@ -209,7 +206,6 @@ class SetUpNewStoryOrGetOldStory(APIView):
                 status=status.HTTP_401_UNAUTHORIZED
             )
 
-        # Get story_id from query params
         story_id = request.query_params.get('story_id')
         kid_id = request.query_params.get('kid_id')
 
@@ -240,7 +236,6 @@ class SetUpNewStoryOrGetOldStory(APIView):
                     status=status.HTTP_404_NOT_FOUND
                 )
 
-            # Replace with kid
             user = kid
             user_id = kid_id
             print(f"Parent {user.user_name} accessing story for kid {kid.user_name}")
@@ -259,7 +254,6 @@ class SetUpNewStoryOrGetOldStory(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Check if user_story exists and is active
         user_story = UserStory.objects.filter(
             user_id=user_id,
             story_id=story_id,
@@ -269,14 +263,12 @@ class SetUpNewStoryOrGetOldStory(APIView):
         ).first()
 
         if user_story:
-            # Return existing user_story with entries
             serializer = UserStorySerializer(user_story)
             return Response({
                 'status': 'SUCCESS',
                 'data': serializer.data
             })
 
-        # Create new user_story
         try:
             story_temp = StoryTemp.objects.get(story_id=story_id)
         except StoryTemp.DoesNotExist:
@@ -287,14 +279,12 @@ class SetUpNewStoryOrGetOldStory(APIView):
 
         try:
             with transaction.atomic():
-                # Create UserStory; ensure it is saved before creating entries
                 user_story = UserStory.objects.create(
                     story=story_temp,
                     user=user,
                     user_story_status=UserStory.Status.ACTIVE
                 )
 
-                # Create first entry: Introduction
                 UserStoryEntry.objects.create(
                     user_story=user_story,
                     entry_title=f"{story_temp.story_title} - Introduction",
@@ -303,7 +293,6 @@ class SetUpNewStoryOrGetOldStory(APIView):
                     entry_status=UserStoryEntry.Status.ACTIVE
                 )
 
-                # Create second entry: Story content
                 if story_temp.story_content:
                     UserStoryEntry.objects.create(
                         user_story=user_story,
@@ -313,10 +302,8 @@ class SetUpNewStoryOrGetOldStory(APIView):
                         entry_status=UserStoryEntry.Status.ACTIVE
                     )
         except Exception as e:
-            # atomic block will roll back automatically
             return Response({'error': f'Failed to create story entries: {e}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        # Return the new user_story with entries
         serializer = UserStorySerializer(user_story)
         return Response({
             'status': 'SUCCESS',
@@ -325,7 +312,6 @@ class SetUpNewStoryOrGetOldStory(APIView):
 
 class RetraceStoryChat(APIView):
     def post(self, request):
-        # authenticate user
         if 'Authorization' not in request.headers:
             return Response({'error': 'Authorization header missing'}, status=status.HTTP_401_UNAUTHORIZED)
         auth_header = request.headers['Authorization']
@@ -341,7 +327,6 @@ class RetraceStoryChat(APIView):
         except Exception:
             return Response({'error': 'Invalid token'}, status=status.HTTP_401_UNAUTHORIZED)
 
-        # parse payload (allow both raw JSON and DRF request.data)
         try:
             data = json.loads(request.body.decode('utf-8'))
         except Exception:
@@ -353,7 +338,6 @@ class RetraceStoryChat(APIView):
         if not user_story_id or not user_story_entry_id:
             return Response({'error': 'user_story_id and user_story_entry_id are required.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # ensure story belongs to this user and is active
         try:
             user_story = UserStory.objects.get(
                 user_story_id=user_story_id,
@@ -363,7 +347,6 @@ class RetraceStoryChat(APIView):
         except UserStory.DoesNotExist:
             return Response({'error': 'User story not found or not active.'}, status=status.HTTP_404_NOT_FOUND)
 
-        # retrieve selected entry
         try:
             selected = UserStoryEntry.objects.get(
                 user_story=user_story,
@@ -373,11 +356,11 @@ class RetraceStoryChat(APIView):
         except UserStoryEntry.DoesNotExist:
             return Response({'error': 'Story entry not found.'}, status=status.HTTP_404_NOT_FOUND)
 
-        # entry must be from the user
+
         if selected.entry_role != UserStoryEntry.Role.USER:
             return Response({'error': 'Can only retrace to a user message.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # deactivate all later active entries for this story
+
         UserStoryEntry.objects.filter(
             user_story=user_story,
             created_on__gte=selected.created_on,
@@ -434,7 +417,7 @@ class StoryChat(APIView):
                 'message': 'No msg input'
             }, status=400)
 
-        # Get user_story and verify ownership
+
         try:
             user_story = UserStory.objects.get(
                 user_story_id=user_story_id,
@@ -447,7 +430,7 @@ class StoryChat(APIView):
                 'message': 'User story not found or not active'
             }, status=404)
 
-        # Get history from user_story_entry, ordered by creation time
+
         entries = UserStoryEntry.objects.filter(
             user_story=user_story,
             entry_status=UserStoryEntry.Status.ACTIVE
@@ -455,7 +438,7 @@ class StoryChat(APIView):
 
         gemini_history = []
 
-        # Add chat settings first
+
         addChatSetting = getChatSetting(chat_tem)
         for temItem in addChatSetting:
             gemini_history.append(
@@ -465,7 +448,7 @@ class StoryChat(APIView):
                 )
             )
 
-        # Add history from entries
+      
         for entry in entries:
             gemini_role = "user" if entry.entry_role == UserStoryEntry.Role.USER else "model"
             gemini_history.append(
@@ -475,7 +458,7 @@ class StoryChat(APIView):
                 )
             )
 
-        chat = client.chats.create(model="gemini-2.5-flash",
+        chat = client.chats.create(model=GEMINI_API_MODEL,
                                 history=gemini_history)
 
         response_stream = chat.send_message_stream(user_message)
@@ -485,7 +468,7 @@ class StoryChat(APIView):
             if chunk.text:
                 full_response_text += chunk.text
 
-        # Save the user input as an entry
+   
         UserStoryEntry.objects.create(
             user_story=user_story,
             entry_title="User Input",
@@ -494,7 +477,7 @@ class StoryChat(APIView):
             entry_status=UserStoryEntry.Status.ACTIVE
         )
 
-        # Save the AI response as a new entry
+       
         UserStoryEntry.objects.create(
             user_story=user_story,
             entry_title=extract_title(full_response_text.strip()),
@@ -503,7 +486,7 @@ class StoryChat(APIView):
             entry_status=UserStoryEntry.Status.ACTIVE
         )
 
-        # Fetch updated active history
+        
         updated_entries = UserStoryEntry.objects.filter(
             user_story=user_story,
             entry_status=UserStoryEntry.Status.ACTIVE
@@ -582,7 +565,7 @@ class StoryChat_old(APIView):
                 )
             )
 
-        chat = client.chats.create(model="gemini-2.5-flash",
+        chat = client.chats.create(model=GEMINI_API_MODEL,
                                 history=gemini_history)
 
         response_stream = chat.send_message_stream(user_message)
@@ -687,13 +670,13 @@ class getChildrenListByParentId(APIView):
         except ValueError:
             return Response({'error': 'parent_id must be an integer.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Verify parent exists
+        
         try:
             parent = UserTable.objects.get(user_id=parent_id, user_type=UserTable.UserType.PARENT)
         except UserTable.DoesNotExist:
             return Response({'error': 'Parent user not found.'}, status=status.HTTP_404_NOT_FOUND)
 
-        # Get all children of this parent (assuming parent_id field exists in UserTable)
+        
         try:
             children = UserTable.objects.filter(
                 parent_id=parent_id,
@@ -766,13 +749,13 @@ class GetKidStoryRecords(APIView):
         except ValueError:
             return Response({'error': 'kid_id must be an integer.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Verify kid exists
+        
         try:
             kid = UserTable.objects.get(user_id=kid_id, user_type=UserTable.UserType.KID)
         except UserTable.DoesNotExist:
             return Response({'error': 'Kid user not found.'}, status=status.HTTP_404_NOT_FOUND)
         
-        # Get all active stories of this kid
+        
         try:
             stories = UserStory.objects.filter(
                 user_id=kid_id,
@@ -905,7 +888,7 @@ class GenOrGetReportFromStory(APIView):
                 )
             )
 
-        # Add history from entries
+        
         for entry in user_story_entrys:
             gemini_role = "user" if entry.entry_role == UserStoryEntry.Role.USER else "model"
             gemini_history.append(
@@ -915,7 +898,7 @@ class GenOrGetReportFromStory(APIView):
                 )
             )
 
-        chat = client.chats.create(model="gemini-2.5-flash",
+        chat = client.chats.create(model=GEMINI_API_MODEL,
                                 history=gemini_history)
 
         response_stream = chat.send_message_stream(report_request)
@@ -966,7 +949,7 @@ class GenerateStory(APIView):
             )
         data = request.data
 
-        # history = data.get('history', [])
+        
         title = data.get('title', '').strip()
         description = data.get('description', '').strip()
         user_message = data.get('user_message', '').strip()
@@ -1004,19 +987,7 @@ class GenerateStory(APIView):
                 )
             )
 
-        # for msg in history:
-        #     role = msg['sender'] 
-        #     content = msg['text']
-
-        #     gemini_role = "user" if role == "user" else "model"
-        #     gemini_history.append(
-        #         types.Content(
-        #             role=gemini_role,
-        #             parts=[types.Part(text=content)]
-        #         )
-        #     )
-
-        chat = client.chats.create(model="gemini-2.5-flash",
+        chat = client.chats.create(model=GEMINI_API_MODEL,
                                 history=gemini_history)
         
         mix_user_msg = f"Title: {title}\nDescription: {description}\nSetting: {user_message}"
@@ -1033,8 +1004,7 @@ class GenerateStory(APIView):
         return Response({
             'status': 'SUCCESS',
             'story_temp': full_response_text.strip(),
-            # 'current_title':extract_title(full_response_text.strip()),
-            # 'history': history
+
         })
     
 
@@ -1069,7 +1039,6 @@ class GenerateStoryIntro(APIView):
             )
         data = request.data
 
-        # history = data.get('history', [])
         user_storysetting = data.get('user_storysetting', '').strip()
         if not user_storysetting:
             return Response({
@@ -1091,7 +1060,7 @@ class GenerateStoryIntro(APIView):
                 )
             )
 
-        chat = client.chats.create(model="gemini-2.5-flash",
+        chat = client.chats.create(model=GEMINI_API_MODEL,
                                 history=gemini_history)
         
         default_story_intro_prompt ="First, generate a creative and engaging introduction for a children's story based on the following setting: " + user_storysetting + " The introduction should be suitable for children, capturing their imagination and setting the stage for an exciting adventure. Please provide a vivid and captivating opening that draws young readers into the world of the story."

@@ -26,14 +26,17 @@ urlpatterns = [
     path('', TestRun.as_view()),
     path('test', TestRunChat.as_view()),
 
-
+    #Real story chat
     path('StoryChat', StoryChat.as_view()),
+    #Testing story
     path('StoryChat_old', StoryChat_old.as_view()),
 
+    # Starting point for story generation
     path('GenerateStory', GenerateStory.as_view()),
     path('GenerateStoryIntro', GenerateStoryIntro.as_view()),
     path('GenerateStoryToDB', GenerateStoryToDB.as_view()),
 
+    #Get story details & children details
     path('GetSingleStory', GetSingleStory.as_view()),
     path('GetStoryTemp', GetStoryTemp.as_view()),
     path('RetraceStoryChat', RetraceStoryChat.as_view()),
@@ -41,6 +44,7 @@ urlpatterns = [
     path('getChildrenListByParentId', getChildrenListByParentId.as_view()),
     path('GetKidStoryRecords', GetKidStoryRecords.as_view()),
 
+    #Generate or get report from story
     path('GenOrGetReportFromStory', GenOrGetReportFromStory.as_view()),
 
     #Login
